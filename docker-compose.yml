@@ -1,14 +1,25 @@
+# Branch oci-prod: build nativo ARM64 (Ampere A1) + bind somente em localhost (atrás do Nginx)
 services:
   mirofish:
-    image: ghcr.io/666ghj/mirofish:latest
-    # 加速镜像（如拉取缓慢可替换上方地址）
-    # image: ghcr.nju.edu.cn/666ghj/mirofish:latest
-    container_name: mirofish
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mirofish-engine
+    restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # O frontend usa 'http://localhost:5001' por padrão (navegador do usuário!).
+      # '/' faz as chamadas irem para o mesmo host, passando pelo Nginx (/api/ -> :5001).
+      - VITE_API_BASE_URL=/
     ports:
-      - "3000:3000"
-      - "5001:5001"
-    restart: unless-stopped
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:5001:5001"
     volumes:
       - ./backend/uploads:/app/backend/uploads
+    mem_limit: 10g
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"

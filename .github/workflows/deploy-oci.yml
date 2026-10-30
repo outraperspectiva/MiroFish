@@ -1,0 +1,60 @@
+name: Deploy MiroFish to Oracle Cloud (sa-saopaulo-1)
+
+on:
+  push:
+    branches: [oci-prod]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-oci
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar SSH
+        env:
+          SSH_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+          VM_IP: ${{ secrets.OCI_VM_PUBLIC_IP }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/oracle.key
+          chmod 600 ~/.ssh/oracle.key
+          ssh-keyscan -H "$VM_IP" >> ~/.ssh/known_hosts
+
+      - name: Gerar .env e enviar para a VM
+        env:
+          VM_IP: ${{ secrets.OCI_VM_PUBLIC_IP }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
+          ZEP_API_KEY: ${{ secrets.ZEP_API_KEY }}
+        run: |
+          umask 177
+          {
+            echo "LLM_API_KEY=$LLM_API_KEY"
+            echo "LLM_BASE_URL=$LLM_BASE_URL"
+            echo "LLM_MODEL_NAME=$LLM_MODEL_NAME"
+            echo "ZEP_API_KEY=$ZEP_API_KEY"
+          } > .env.prod
+          scp -i ~/.ssh/oracle.key .env.prod ubuntu@"$VM_IP":/tmp/mirofish.env
+
+      - name: Atualizar código e reconstruir
+        env:
+          VM_IP: ${{ secrets.OCI_VM_PUBLIC_IP }}
+        run: |
+          ssh -i ~/.ssh/oracle.key ubuntu@"$VM_IP" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd /var/www/mirofish
+          git fetch origin
+          git checkout oci-prod
+          git reset --hard origin/oci-prod
+          install -m 600 /tmp/mirofish.env .env && rm -f /tmp/mirofish.env
+          mkdir -p backend/uploads
+          docker compose up -d --build --remove-orphans
+          docker image prune -f
+          sleep 20
+          curl -fsS -o /dev/null http://127.0.0.1:3000 && echo "frontend OK"
+          curl -sS -o /dev/null -w "backend HTTP %{http_code}\n" http://127.0.0.1:5001/
+          REMOTE
